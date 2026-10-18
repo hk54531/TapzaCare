@@ -1,7 +1,8 @@
 
-import React, { useMemo, useState } from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Image,
   ImageBackground,
   ScrollView,
@@ -12,13 +13,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {SafeAreaView} from 'react-native-safe-area-context';
 
-import { useAppTheme } from '../theme/ThemeProvider';
-import type { LayoutConfig, SectionConfig } from '../types/config';
-import type { ConfigMode } from '../hooks/useConfig';
+import {useAppTheme} from '../theme/ThemeProvider';
+import type {LayoutConfig, SectionConfig} from '../types/config';
+import type {ConfigMode} from '../hooks/useConfig';
 
-type HomeScreenProps = {
+type Props = {
   config: LayoutConfig;
   mode: ConfigMode;
   loadingConfig: boolean;
@@ -27,33 +28,27 @@ type HomeScreenProps = {
   onRetryConfig: () => Promise<void>;
 };
 
-type ConfigItem = Record<string, unknown>;
+type Item = Record<string, unknown>;
 
-function asItem(value: unknown): ConfigItem {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as ConfigItem;
-  }
-  return {};
-}
+const text = (value: unknown, fallback = '') =>
+  typeof value === 'string' ? value : fallback;
 
-function asText(value: unknown, fallback = ''): string {
-  return typeof value === 'string' ? value : fallback;
-}
+const number = (value: unknown, fallback = 0) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
-function asNumber(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? value
-    : fallback;
-}
+const itemsOf = (section: SectionConfig): Item[] =>
+  Array.isArray(section.items)
+    ? section.items.filter(
+        (item): item is Item =>
+          !!item &&
+          typeof item === 'object' &&
+          !Array.isArray(item),
+      )
+    : [];
 
-function asItems(section: SectionConfig): ConfigItem[] {
-  return Array.isArray(section.items) ? section.items.map(asItem) : [];
-}
+const money = (value: number) => `₹${value.toLocaleString('en-IN')}`;
 
-function formatRupees(value: number): string {
-  return `₹${value.toLocaleString('en-IN')}`;
-}
-function getIcon(iconName: string): string {
+const iconFor = (name: string) => {
   const icons: Record<string, string> = {
     stethoscope: '🩺',
     'flask-conical': '🧪',
@@ -63,10 +58,14 @@ function getIcon(iconName: string): string {
     'calendar-plus': '📅',
     'file-text': '📄',
     bell: '🔔',
+    home: '⌂',
+    calendar: '▦',
+    user: '♙',
+    heart: '♥',
   };
 
-  return icons[iconName] ?? '✚';
-}
+  return icons[name] ?? '✚';
+};
 
 export default function HomeScreen({
   config,
@@ -75,9 +74,22 @@ export default function HomeScreen({
   configError,
   onSwitchMode,
   onRetryConfig,
-}: HomeScreenProps) {
-  const { theme } = useAppTheme();
+}: Props) {
+  const {theme} = useAppTheme();
   const [search, setSearch] = useState('');
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const entrance = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    entrance.setValue(0);
+
+    Animated.spring(entrance, {
+      toValue: 1,
+      tension: 48,
+      friction: 9,
+      useNativeDriver: true,
+    }).start();
+  }, [config.version, entrance]);
 
   const sections = useMemo(
     () => (Array.isArray(config.sections) ? config.sections : []),
@@ -85,868 +97,904 @@ export default function HomeScreen({
   );
 
   const festival = config.theme.festival;
-  const greeting = festival?.greeting || 'Your health, made simple.';
+  const isFestival = mode === 'festival';
 
-  const visibleSections = sections.filter(section => {
-    const items = asItems(section);
-
-    if (
-      section.type === 'service_grid' ||
-      section.type === 'category_chips' ||
-      section.type === 'quick_actions'
-    ) {
-      if (!search.trim()) {
-        return true;
-      }
-
-      const query = search.trim().toLowerCase();
-      const matches = items.some(item => {
-        const searchableText = [
-          item.name,
-          item.title,
-          item.label,
-          item.subtitle,
-          item.specialty,
-        ]
-          .map(value => asText(value))
-          .join(' ')
-          .toLowerCase();
-
-        return searchableText.includes(query);
-      });
-
-      return matches;
-    }
-
-    return true;
+  const headerScale = scrollY.interpolate({
+    inputRange: [0, 100],
+    outputRange: [1, 0.96],
+    extrapolate: 'clamp',
   });
 
+  const heroParallax = scrollY.interpolate({
+    inputRange: [0, 180],
+    outputRange: [0, -22],
+    extrapolate: 'clamp',
+  });
+
+  const filteredSections = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    if (!query) {
+      return sections;
+    }
+
+    return sections
+      .map(section => {
+        if (
+          ![
+            'category_chips',
+            'quick_actions',
+            'service_grid',
+            'doctor_carousel',
+          ].includes(section.type)
+        ) {
+          return section;
+        }
+
+        const filtered = itemsOf(section).filter(item => {
+          const values = [
+            item.name,
+            item.label,
+            item.title,
+            item.specialty,
+            item.subtitle,
+          ];
+
+          return values
+            .map(value => text(value).toLowerCase())
+            .join(' ')
+            .includes(query);
+        });
+
+        return {...section, items: filtered};
+      })
+      .filter(section => {
+        if (
+          [
+            'category_chips',
+            'quick_actions',
+            'service_grid',
+            'doctor_carousel',
+          ].includes(section.type)
+        ) {
+          return itemsOf(section).length > 0;
+        }
+
+        return false;
+      });
+  }, [search, sections]);
+
+  const sectionHeading = (section: SectionConfig) =>
+    section.title ? (
+      <View style={styles.sectionHeading}>
+        <View style={styles.headingAccent} />
+        <Text
+          style={[styles.sectionTitle, {color: theme.textPrimary}]}>
+          {section.title}
+        </Text>
+      </View>
+    ) : null;
+
   const renderHero = (section: SectionConfig) => {
-    const item = asItems(section)[0] ?? {};
-    const title = asText(item.greeting, greeting);
-    const subtitle = asText(
-      item.subtitle,
-      'Make your next health visit easier.',
-    );
-    const imageUrl = asText(
+    const item = itemsOf(section)[0] ?? {};
+    const imageUrl = text(
       item.imageUrl,
       festival?.bannerImageUrl ?? '',
     );
-    const backgroundValue = section.background?.value ?? theme.primary;
-    const heroColor =
-      section.background?.kind === 'color'
-        ? backgroundValue
-        : theme.primary;
+    const hasImage =
+      (section.background?.kind === 'image' ||
+        Boolean(imageUrl)) &&
+      Boolean(imageUrl);
 
-    const heroContent = (
+    const content = (
       <View style={styles.heroContent}>
-        <Text style={styles.heroEyebrow}>
-          {festival?.name
-            ? `${festival.name.toUpperCase()} SPECIAL`
-            : 'YOUR HEALTH, OUR PRIORITY'}
+        <View style={styles.heroPill}>
+          <Text style={styles.heroPillText}>
+            {isFestival ? '✦ FESTIVE WELLNESS' : '✦ YOUR HEALTH, FIRST'}
+          </Text>
+        </View>
+
+        <Text style={styles.heroTitle}>
+          {text(item.greeting, section.title || 'Better health starts here')}
         </Text>
 
-        <Text style={styles.heroTitle}>{title}</Text>
-
-        <Text style={styles.heroSubtitle}>{subtitle}</Text>
+        <Text style={styles.heroSubtitle}>
+          {text(
+            item.subtitle,
+            'Trusted care for you and your family, all in one place.',
+          )}
+        </Text>
 
         <TouchableOpacity
+          activeOpacity={0.82}
           accessibilityRole="button"
-          accessibilityLabel="Explore health services"
           onPress={() => setSearch('')}
-          style={[
-            styles.heroButton,
-            { backgroundColor: theme.surface },
-          ]}>
-          <Text style={[styles.heroButtonText, { color: theme.primary }]}>
-            {asText(item.actionLabel, 'Explore services →')}
+          style={styles.heroButton}>
+          <Text style={[styles.heroButtonText, {color: theme.primary}]}>
+            {text(item.actionLabel, 'Explore services')}  →
           </Text>
         </TouchableOpacity>
       </View>
     );
 
     return (
-      <View
+      <Animated.View
         key={section.id}
         style={[
-          styles.hero,
-          { backgroundColor: heroColor },
+          styles.heroWrap,
+          {
+            opacity: entrance,
+            transform: [
+              {translateY: Animated.multiply(entrance, -10).interpolate({
+                inputRange: [-10, 0],
+                outputRange: [10, 0],
+              })},
+              {translateY: heroParallax},
+            ],
+          },
         ]}>
-        {section.background?.kind === 'image' && imageUrl ? (
+        {hasImage ? (
           <ImageBackground
-            source={{ uri: imageUrl }}
+            source={{uri: imageUrl}}
             resizeMode="cover"
-            style={styles.heroImage}
-            imageStyle={styles.heroImageStyle}>
-            <View style={styles.heroOverlay}>{heroContent}</View>
+            style={styles.hero}
+            imageStyle={styles.heroImage}>
+            <View style={styles.heroShade}>{content}</View>
           </ImageBackground>
         ) : (
-          <View style={styles.heroInner}>
-            {heroContent}
-            <Text style={styles.heroEmoji}>
-              {festival?.name ? '🪔' : '💚'}
+          <View
+            style={[
+              styles.hero,
+              {backgroundColor: theme.primary},
+            ]}>
+            <View
+              style={[
+                styles.heroOrb,
+                {backgroundColor: theme.secondary},
+              ]}
+            />
+            <View
+              style={[
+                styles.heroOrbSmall,
+                {backgroundColor: theme.accent},
+              ]}
+            />
+            {content}
+            <Text style={styles.heroDecoration}>
+              {isFestival ? '🪔' : '✚'}
             </Text>
           </View>
         )}
-      </View>
+      </Animated.View>
     );
   };
 
-  const renderCategories = (section: SectionConfig) => {
-    const items = asItems(section);
+  const renderCategories = (section: SectionConfig) => (
+    <View key={section.id} style={styles.section}>
+      {sectionHeading(section)}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.horizontalContent}>
+        {itemsOf(section).map((item, index) => {
+          const label = text(item.label, text(item.name, 'Service'));
 
-    return (
-      <View key={section.id} style={styles.section}>
-        {renderSectionHeading(section)}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalItems}>
-          {items.map((item, index) => {
-            const label = asText(
-              item.name,
-              asText(item.label, asText(item.title, 'Service')),
-            );
-
-            return (
-              <TouchableOpacity
-                key={asText(item.id, `${section.id}-${index}`)}
-                accessibilityRole="button"
-                onPress={() => setSearch(label)}
+          return (
+            <TouchableOpacity
+              key={text(item.id, `${section.id}-${index}`)}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              onPress={() => setSearch(label)}
+              style={styles.categoryItem}>
+              <View
                 style={[
-                  styles.categoryChip,
-                  { backgroundColor: theme.secondary },
+                  styles.categoryCircle,
+                  {backgroundColor: theme.secondary},
                 ]}>
-                <Text style={styles.categoryEmoji}>
-                  {getIcon(asText(item.icon))}
+                <Text style={styles.categoryIcon}>
+                  {iconFor(text(item.icon))}
                 </Text>
+              </View>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.categoryLabel,
+                  {color: theme.textPrimary},
+                ]}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
 
+  const renderQuickActions = (section: SectionConfig) => (
+    <View key={section.id} style={styles.section}>
+      {sectionHeading(section)}
+      <View style={styles.quickGrid}>
+        {itemsOf(section).map((item, index) => {
+          const label = text(
+            item.label,
+            text(item.name, text(item.title, 'Explore')),
+          );
+
+          return (
+            <TouchableOpacity
+              key={text(item.id, `${section.id}-${index}`)}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              onPress={() => setSearch(label)}
+              style={[
+                styles.quickCard,
+                {
+                  backgroundColor: theme.surface,
+                  borderColor: theme.secondary,
+                },
+              ]}>
+              <View
+                style={[
+                  styles.quickIconCircle,
+                  {backgroundColor: theme.secondary},
+                ]}>
+                <Text style={styles.quickIcon}>
+                  {iconFor(text(item.icon))}
+                </Text>
+              </View>
+              <View style={styles.quickLabelRow}>
                 <Text
-                  style={[styles.categoryLabel, { color: theme.primary }]}>
+                  style={[
+                    styles.quickLabel,
+                    {color: theme.textPrimary},
+                  ]}>
                   {label}
                 </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-    );
-  };
-
-  const renderQuickActions = (section: SectionConfig) => {
-    const items = asItems(section);
-
-    return (
-      <View key={section.id} style={styles.section}>
-        {renderSectionHeading(section)}
-        <View style={styles.quickGrid}>
-          {items.map((item, index) => {
-            const title = asText(
-              item.name,
-              asText(item.title, asText(item.label, 'Explore')),
-            );
-
-            return (
-              <TouchableOpacity
-                key={asText(item.id, `${section.id}-${index}`)}
-                accessibilityRole="button"
-                onPress={() => setSearch(title)}
-                style={[
-                  styles.quickAction,
-                  {
-                    backgroundColor: theme.surface,
-                    borderColor: theme.secondary,
-                  },
-                ]}>
-                <View
-                  style={[
-                    styles.quickIconBox,
-                    { backgroundColor: theme.secondary },
-                  ]}>
-                  <Text style={styles.quickIcon}>
-                    {getIcon(asText(item.icon))}
-                  </Text>
-                </View>
-                <Text
-                  style={[styles.quickTitle, { color: theme.textPrimary }]}>
-                  {title}
+                <Text style={[styles.cardArrow, {color: theme.primary}]}>
+                  →
                 </Text>
-                {Boolean(item.subtitle) && (
-                  <Text
-                    style={[
-                      styles.cardSubtitle,
-                      { color: theme.textSecondary },
-                    ]}>
-                    {asText(item.subtitle)}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+              </View>
+              {Boolean(item.subtitle) && (
+                <Text
+                  style={[
+                    styles.mutedText,
+                    {color: theme.textSecondary},
+                  ]}>
+                  {text(item.subtitle)}
+                </Text>
+              )}
+            </TouchableOpacity>
+          );
+        })}
       </View>
-    );
-  };
+    </View>
+  );
 
-  const renderServiceGrid = (section: SectionConfig) => {
-    const items = asItems(section);
+  const renderServices = (section: SectionConfig) => (
+    <View key={section.id} style={styles.section}>
+      <View style={styles.headingRow}>
+        {sectionHeading(section)}
+        <Text style={[styles.viewAll, {color: theme.primary}]}>
+          {search ? '' : 'Explore'}
+        </Text>
+      </View>
 
-    return (
-      <View key={section.id} style={styles.section}>
-        {renderSectionHeading(section)}
-        <View style={styles.serviceGrid}>
-          {items.map((item, index) => {
-            const title = asText(
-              item.name,
-              asText(item.title, 'Health service'),
-            );
-            const imageUrl = asText(
-              item.imageUrl,
-              asText(item.photoUrl),
-            );
-            const icon = asText(item.icon, '🩺');
-            const price = asNumber(
-              item.priceInr,
-              asNumber(item.feeInr, 0),
-            );
-            const badge = asText(item.badge);
+      <View style={styles.serviceGrid}>
+        {itemsOf(section).map((item, index) => {
+          const label = text(item.name, text(item.title, 'Health service'));
+          const imageUrl = text(item.imageUrl, text(item.photoUrl));
+          const price = number(item.priceInr, number(item.feeInr));
+          const badge = text(item.badge);
 
-            return (
-              <TouchableOpacity
-                key={asText(item.id, `${section.id}-${index}`)}
-                accessibilityRole="button"
-                onPress={() => setSearch(title)}
-                style={[
-                  styles.serviceCard,
-                  {
-                    backgroundColor: theme.surface,
-                    borderColor: theme.secondary,
-                  },
-                ]}>
+          return (
+            <TouchableOpacity
+              key={text(item.id, `${section.id}-${index}`)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              onPress={() => setSearch(label)}
+              style={[
+                styles.serviceCard,
+                {
+                  backgroundColor: theme.surface,
+                  borderColor: theme.secondary,
+                },
+              ]}>
+              <View style={styles.serviceImageWrap}>
                 {imageUrl ? (
                   <Image
-                    source={{ uri: imageUrl }}
-                    style={styles.serviceImage}
+                    source={{uri: imageUrl}}
                     resizeMode="cover"
+                    style={styles.serviceImage}
                   />
                 ) : (
                   <View
                     style={[
-                      styles.serviceIconBox,
-                      { backgroundColor: theme.secondary },
+                      styles.serviceImageFallback,
+                      {backgroundColor: theme.secondary},
                     ]}>
-                    <Text style={styles.serviceIcon}>{icon}</Text>
+                    <Text style={styles.serviceFallbackIcon}>
+                      {iconFor(text(item.icon, 'heart'))}
+                    </Text>
+                    <View
+                      style={[
+                        styles.imageSparkle,
+                        {backgroundColor: theme.accent},
+                      ]}
+                    />
                   </View>
                 )}
 
                 {badge ? (
                   <View
                     style={[
-                      styles.badge,
-                      { backgroundColor: theme.secondary },
+                      styles.serviceBadge,
+                      {backgroundColor: theme.accent},
                     ]}>
-                    <Text style={{ color: theme.primary, fontSize: 10 }}>
+                    <Text
+                      style={[
+                        styles.serviceBadgeText,
+                        {color: theme.textPrimary},
+                      ]}>
                       {badge}
                     </Text>
                   </View>
                 ) : null}
+              </View>
 
-                <Text
-                  style={[styles.serviceTitle, { color: theme.textPrimary }]}>
-                  {title}
-                </Text>
-
-                {Boolean(item.subtitle) && (
-                  <Text
-                    style={[
-                      styles.cardSubtitle,
-                      { color: theme.textSecondary },
-                    ]}>
-                    {asText(item.subtitle)}
-                  </Text>
-                )}
-
-                {price > 0 && (
-                  <Text
-                    style={[styles.price, { color: theme.primary }]}>
-                    {formatRupees(price)}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-    );
-  };
-
-  const renderDoctors = (section: SectionConfig) => {
-    const items = asItems(section);
-
-    return (
-      <View key={section.id} style={styles.section}>
-        {renderSectionHeading(section)}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalItems}>
-          {items.map((item, index) => {
-            const name = asText(item.name, 'Doctor');
-            const photoUrl = asText(
-              item.photoUrl,
-              asText(item.imageUrl),
-            );
-
-            return (
-              <TouchableOpacity
-                key={asText(item.id, `${section.id}-${index}`)}
-                accessibilityRole="button"
-                onPress={() => setSearch(name)}
+              <Text
+                numberOfLines={2}
                 style={[
-                  styles.doctorCard,
-                  {
-                    backgroundColor: theme.surface,
-                    borderColor: theme.secondary,
-                  },
+                  styles.serviceTitle,
+                  {color: theme.textPrimary},
                 ]}>
-                {photoUrl ? (
+                {label}
+              </Text>
+
+              <View style={styles.priceRow}>
+                <Text style={[styles.price, {color: theme.primary}]}>
+                  {price > 0 ? money(price) : 'View details'}
+                </Text>
+                <View
+                  style={[
+                    styles.priceArrow,
+                    {backgroundColor: theme.secondary},
+                  ]}>
+                  <Text style={{color: theme.primary}}>↗</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+
+  const renderDoctors = (section: SectionConfig) => (
+    <View key={section.id} style={styles.section}>
+      {sectionHeading(section)}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.horizontalContent}>
+        {itemsOf(section).map((item, index) => {
+          const name = text(item.name, 'Doctor');
+          const photo = text(item.photoUrl, text(item.imageUrl));
+
+          return (
+            <TouchableOpacity
+              key={text(item.id, `${section.id}-${index}`)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              onPress={() => setSearch(name)}
+              style={[
+                styles.doctorCard,
+                {
+                  backgroundColor: theme.surface,
+                  borderColor: theme.secondary,
+                },
+              ]}>
+              <View
+                style={[
+                  styles.doctorPhotoWrap,
+                  {backgroundColor: theme.secondary},
+                ]}>
+                {photo ? (
                   <Image
-                    source={{ uri: photoUrl }}
+                    source={{uri: photo}}
                     style={styles.doctorPhoto}
                     resizeMode="cover"
                   />
                 ) : (
-                  <View
-                    style={[
-                      styles.doctorPlaceholder,
-                      { backgroundColor: theme.secondary },
-                    ]}>
-                    <Text style={styles.doctorPlaceholderIcon}>👨‍⚕️</Text>
-                  </View>
+                  <Text style={styles.doctorEmoji}>👨‍⚕️</Text>
                 )}
+                <View style={styles.availableDot} />
+              </View>
 
-                <Text
-                  numberOfLines={1}
-                  style={[styles.doctorName, { color: theme.textPrimary }]}>
-                  {name}
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.doctorName,
+                  {color: theme.textPrimary},
+                ]}>
+                {name}
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.doctorSpecialty,
+                  {color: theme.textSecondary},
+                ]}>
+                {text(item.specialty, 'General Physician')}
+              </Text>
+
+              <View
+                style={[
+                  styles.slotPill,
+                  {backgroundColor: theme.secondary},
+                ]}>
+                <Text style={[styles.slotText, {color: theme.primary}]}>
+                  ◷ {text(item.nextSlot, 'Slots available')}
                 </Text>
+              </View>
 
-                <Text
-                  numberOfLines={2}
-                  style={[
-                    styles.cardSubtitle,
-                    { color: theme.textSecondary },
-                  ]}>
-                  {asText(item.specialty, 'General Physician')}
+              <Text style={[styles.doctorFee, {color: theme.primary}]}>
+                {money(number(item.feeInr))}
+                <Text style={[styles.feeSuffix, {color: theme.textSecondary}]}>
+                  {' '} / visit
                 </Text>
-
-                <Text style={[styles.price, { color: theme.primary }]}>
-                  {formatRupees(asNumber(item.feeInr, 0))}
-                </Text>
-
-                {Boolean(item.nextSlot) && (
-                  <Text
-                    style={[
-                      styles.nextSlot,
-                      { color: theme.textSecondary },
-                    ]}>
-                    Next: {asText(item.nextSlot)}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-    );
-  };
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
 
   const renderOffer = (section: SectionConfig) => {
-    const item = asItems(section)[0] ?? {};
+    const item = itemsOf(section)[0] ?? {};
 
     return (
       <View
         key={section.id}
         style={[
-          styles.offerStrip,
-          { backgroundColor: theme.accent },
+          styles.offerCard,
+          {backgroundColor: theme.secondary},
         ]}>
-        <Text style={styles.offerEmoji}>
-          {asText(item.icon, '✨')}
-        </Text>
-        <View style={styles.offerTextContainer}>
-          <Text style={[styles.offerTitle, { color: theme.textPrimary }]}>
-            {asText(item.title, section.title || 'Special offer')}
+        <View style={styles.offerIconCircle}>
+          <Text style={styles.offerIcon}>
+            {text(item.icon, isFestival ? '🪔' : '💚')}
           </Text>
-          <Text style={[styles.offerSubtitle, { color: theme.textPrimary }]}>
-            {asText(
-              item.subtitle,
-              'Take a step towards better health today.',
+        </View>
+        <View style={styles.offerCopy}>
+          <Text style={[styles.offerTitle, {color: theme.textPrimary}]}>
+            {text(item.title, section.title || 'A little care goes a long way')}
+          </Text>
+          <Text style={[styles.offerSubtitle, {color: theme.textSecondary}]}>
+            {text(
+              item.message,
+              text(item.subtitle, 'Make time for your health this week.'),
             )}
           </Text>
         </View>
+        <Text style={[styles.offerArrow, {color: theme.primary}]}>→</Text>
       </View>
     );
   };
-
-  function renderSectionHeading(section: SectionConfig) {
-    if (!section.title) {
-      return null;
-    }
-
-    return (
-      <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: theme.textPrimary }]}>
-          {section.title}
-        </Text>
-      </View>
-    );
-  }
 
   const renderSection = (section: SectionConfig) => {
     switch (section.type) {
       case 'hero_banner':
         return renderHero(section);
-
       case 'category_chips':
         return renderCategories(section);
-
       case 'quick_actions':
         return renderQuickActions(section);
-
       case 'service_grid':
-        return renderServiceGrid(section);
-
+        return renderServices(section);
       case 'doctor_carousel':
         return renderDoctors(section);
-
       case 'offer_strip':
         return renderOffer(section);
-
       default:
-        // Unknown config section types must never crash the screen.
         return null;
     }
   };
 
   return (
     <SafeAreaView
-      style={[styles.container, { backgroundColor: theme.background }]}
-      edges={['top', 'left', 'right', 'bottom']}>
+      edges={['top', 'left', 'right', 'bottom']}
+      style={[styles.screen, {backgroundColor: theme.background}]}>
       <StatusBar
-        barStyle="dark-content"
-      // backgroundColor={theme.background}
+        barStyle={isFestival ? 'dark-content' : 'dark-content'}
+        // backgroundColor={theme.background}
       />
 
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <View style={styles.headerText}>
-            <Text style={[styles.brand, { color: theme.primary }]}>
-              TapzaCare
+      <Animated.View
+        style={[
+          styles.topBar,
+          {
+            backgroundColor: theme.background,
+            transform: [{scale: headerScale}],
+          },
+        ]}>
+        <View style={styles.brandMark}>
+          <View
+            style={[styles.brandMarkInner, {backgroundColor: theme.primary}]}>
+            <Text style={styles.brandMarkText}>+</Text>
+          </View>
+          <View>
+            <Text style={[styles.brandName, {color: theme.textPrimary}]}>
+              Tapza<Text style={{color: theme.primary}}>Care</Text>
             </Text>
-            <Text style={[styles.greeting, { color: theme.textPrimary }]}>
-              Hello there 👋
-            </Text>
-            <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-              {greeting}
+            <Text style={[styles.brandCaption, {color: theme.textSecondary}]}>
+              YOUR HEALTH COMPANION
             </Text>
           </View>
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Switch between normal and festival themes"
-            disabled={loadingConfig}
-            onPress={() => {
-              void onSwitchMode(
-                mode === 'normal' ? 'festival' : 'normal',
-              );
-            }}
-            style={[
-              styles.themeSwitch,
-              { backgroundColor: theme.secondary },
-            ]}>
-            {loadingConfig ? (
-              <ActivityIndicator color={theme.primary} />
-            ) : (
-              <Text style={[styles.themeSwitchText, { color: theme.primary }]}>
-                {mode === 'normal'
-                  ? '🪔 Try festival'
-                  : '🌿 Normal day'}
-              </Text>
-            )}
-          </TouchableOpacity>
         </View>
 
-        {configError !== null && (
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading configuration"
-            onPress={() => {
-              void onRetryConfig();
-            }}
-            style={[
-              styles.errorBanner,
-              { backgroundColor: theme.secondary },
-            ]}>
-            <Text style={{ color: theme.textPrimary }}>
-              {configError} Tap to retry.
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Switch app theme"
+          disabled={loadingConfig}
+          onPress={() =>
+            void onSwitchMode(isFestival ? 'normal' : 'festival')
+          }
+          activeOpacity={0.75}
+          style={[
+            styles.themeButton,
+            {backgroundColor: theme.secondary},
+          ]}>
+          {loadingConfig ? (
+            <ActivityIndicator size="small" color={theme.primary} />
+          ) : (
+            <Text style={[styles.themeButtonText, {color: theme.primary}]}>
+              {isFestival ? '🌿 Normal' : '🪔 Festival'}
             </Text>
-          </TouchableOpacity>
+          )}
+        </TouchableOpacity>
+      </Animated.View>
+
+      <Animated.ScrollView
+        onScroll={Animated.event(
+          [{nativeEvent: {contentOffset: {y: scrollY}}}],
+          {useNativeDriver: true},
         )}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}>
+        <View style={styles.greetingBlock}>
+          <View style={{flex: 1}}>
+            <Text style={[styles.eyebrow, {color: theme.primary}]}>
+              {isFestival ? 'CELEBRATE WELLNESS ✨' : 'A HEALTHIER YOU STARTS HERE'}
+            </Text>
+            <Text style={[styles.greeting, {color: theme.textPrimary}]}>
+              {isFestival ? 'Care that feels like home.' : 'Hello there 👋'}
+            </Text>
+            <Text style={[styles.greetingSubtitle, {color: theme.textSecondary}]}>
+              {text(festival?.greeting, 'Good health, without the hassle.')}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.greetingAvatar,
+              {backgroundColor: theme.secondary},
+            ]}>
+            <Text style={styles.greetingAvatarText}>
+              {isFestival ? '🪔' : '💚'}
+            </Text>
+          </View>
+        </View>
 
         <View
           style={[
-            styles.searchBox,
+            styles.searchBar,
             {
               backgroundColor: theme.surface,
               borderColor: theme.secondary,
             },
           ]}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <Text style={styles.searchIcon}>⌕</Text>
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="Search doctors, services..."
+            placeholder="Doctors, tests, medicines..."
             placeholderTextColor={theme.textSecondary}
-            style={[styles.searchInput, { color: theme.textPrimary }]}
-            accessibilityLabel="Search health services"
+            accessibilityLabel="Search doctors, tests and medicines"
             returnKeyType="search"
-            clearButtonMode="while-editing"
+            style={[styles.searchInput, {color: theme.textPrimary}]}
           />
-          {search.length > 0 && (
+          {search.length > 0 ? (
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel="Clear search"
               onPress={() => setSearch('')}
               style={styles.clearButton}>
-              <Text style={{ color: theme.textSecondary }}>Clear</Text>
+              <Text style={{color: theme.primary}}>✕</Text>
             </TouchableOpacity>
+          ) : (
+            <View
+              style={[styles.searchAction, {backgroundColor: theme.primary}]}>
+              <Text style={styles.searchActionText}>⌕</Text>
+            </View>
           )}
         </View>
 
-        {visibleSections.map(section => renderSection(section))}
+        {configError ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => void onRetryConfig()}
+            style={[
+              styles.errorCard,
+              {backgroundColor: theme.secondary},
+            ]}>
+            <Text style={{color: theme.textPrimary}}>
+              {configError}  ·  Tap to retry
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
-        <Text style={[styles.footer, { color: theme.textSecondary }]}>
-          TapzaCare • Your health, made simple.
-        </Text>
-      </ScrollView>
+        {filteredSections.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyIcon}>🔎</Text>
+            <Text style={[styles.emptyTitle, {color: theme.textPrimary}]}>
+              No matching services
+            </Text>
+            <Text style={[styles.emptySubtitle, {color: theme.textSecondary}]}>
+              Try another search term.
+            </Text>
+            <TouchableOpacity
+              onPress={() => setSearch('')}
+              style={[styles.resetButton, {backgroundColor: theme.primary}]}>
+              <Text style={styles.resetButtonText}>Clear search</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          filteredSections.map((section, index) => (
+            <Animated.View
+              key={section.id}
+              style={{
+                opacity: entrance,
+                transform: [
+                  {
+                    translateY: entrance.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [18 + index * 3, 0],
+                    }),
+                  },
+                ],
+              }}>
+              {renderSection(section)}
+            </Animated.View>
+          ))
+        )}
+
+        <View style={styles.footer}>
+          <Text style={styles.footerHeart}>♥</Text>
+          <Text style={[styles.footerText, {color: theme.textSecondary}]}>
+            Made for your family's wellbeing
+          </Text>
+          <Text style={[styles.footerCaption, {color: theme.textSecondary}]}>
+            TAPZACARE  ·  CARE MADE SIMPLE
+          </Text>
+        </View>
+      </Animated.ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
+  screen: {flex: 1},
+  topBar: {
+    minHeight: 66,
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 32,
-  },
-  header: {
+    paddingVertical: 10,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 5,
+  },
+  brandMark: {flexDirection: 'row', alignItems: 'center', gap: 10},
+  brandMarkInner: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandMarkText: {color: '#FFFFFF', fontSize: 29, fontWeight: '700', lineHeight: 34},
+  brandName: {fontSize: 19, fontWeight: '900', letterSpacing: -0.6},
+  brandCaption: {fontSize: 8, fontWeight: '800', letterSpacing: 1.1, marginTop: 2},
+  themeButton: {
+    minHeight: 44,
+    minWidth: 82,
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  themeButtonText: {fontSize: 12, fontWeight: '800'},
+  content: {paddingHorizontal: 18, paddingTop: 10, paddingBottom: 36},
+  greetingBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
     marginBottom: 20,
     gap: 12,
   },
-  headerText: {
-    flex: 1,
-  },
-  brand: {
-    fontSize: 17,
-    fontWeight: '800',
-    marginBottom: 8,
-  },
-  greeting: {
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  subtitle: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 5,
-  },
-  themeSwitch: {
-    minHeight: 44,
-    minWidth: 44,
-    maxWidth: 132,
+  eyebrow: {fontSize: 10, fontWeight: '900', letterSpacing: 1.15, marginBottom: 8},
+  greeting: {fontSize: 27, fontWeight: '900', letterSpacing: -0.8},
+  greetingSubtitle: {fontSize: 13, lineHeight: 19, marginTop: 5},
+  greetingAvatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 20,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
   },
-  themeSwitchText: {
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  errorBanner: {
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 16,
-  },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  greetingAvatarText: {fontSize: 29},
+  searchBar: {
+    minHeight: 56,
+    borderRadius: 18,
     borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    minHeight: 52,
-    marginBottom: 24,
-  },
-  searchIcon: {
-    fontSize: 18,
-    marginRight: 10,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    paddingVertical: 12,
-  },
-  clearButton: {
-    minHeight: 44,
-    justifyContent: 'center',
-    paddingLeft: 8,
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionHeader: {
-    marginBottom: 14,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  horizontalItems: {
-    gap: 12,
-    paddingRight: 4,
-  },
-  hero: {
-    borderRadius: 22,
-    overflow: 'hidden',
-    marginBottom: 28,
-    minHeight: 200,
-  },
-  heroImage: {
-    minHeight: 200,
-  },
-  heroImageStyle: {
-    borderRadius: 22,
-  },
-  heroOverlay: {
-    flex: 1,
-    minHeight: 200,
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.32)',
-    padding: 20,
-  },
-  heroInner: {
-    flex: 1,
-    minHeight: 200,
+    paddingLeft: 15,
+    paddingRight: 7,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 20,
+    marginBottom: 25,
+    elevation: 2,
+    shadowColor: '#000000',
+    shadowOffset: {width: 0, height: 3},
+    shadowOpacity: 0.045,
+    shadowRadius: 9,
   },
-  heroContent: {
+  searchIcon: {fontSize: 27, marginRight: 9},
+  searchInput: {flex: 1, fontSize: 14, paddingVertical: 10},
+  searchAction: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchActionText: {color: '#FFFFFF', fontSize: 24},
+  clearButton: {width: 42, height: 44, alignItems: 'center', justifyContent: 'center'},
+  errorCard: {padding: 14, borderRadius: 14, marginBottom: 20},
+  heroWrap: {marginBottom: 28},
+  hero: {
+    minHeight: 220,
+    borderRadius: 25,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    padding: 22,
+  },
+  heroImage: {borderRadius: 25},
+  heroShade: {
     flex: 1,
+    minHeight: 220,
+    justifyContent: 'center',
+    padding: 22,
+    backgroundColor: 'rgba(0,0,0,0.36)',
   },
-  heroEyebrow: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-    marginBottom: 10,
+  heroContent: {zIndex: 2, maxWidth: '88%'},
+  heroPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginBottom: 13,
   },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 25,
-    lineHeight: 32,
-    fontWeight: '800',
-  },
-  heroSubtitle: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 8,
-    marginBottom: 14,
-  },
+  heroPillText: {color: '#FFFFFF', fontSize: 9, fontWeight: '900', letterSpacing: 1},
+  heroTitle: {color: '#FFFFFF', fontSize: 27, lineHeight: 33, fontWeight: '900', letterSpacing: -0.5},
+  heroSubtitle: {color: '#FFFFFF', fontSize: 13, lineHeight: 19, marginTop: 9, marginBottom: 17},
   heroButton: {
     alignSelf: 'flex-start',
     minHeight: 44,
+    borderRadius: 13,
+    paddingHorizontal: 15,
     justifyContent: 'center',
-    borderRadius: 10,
-    paddingHorizontal: 13,
-    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
   },
-  heroButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
+  heroButtonText: {fontSize: 12, fontWeight: '900'},
+  heroOrb: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    right: -60,
+    top: -55,
+    opacity: 0.17,
   },
-  heroEmoji: {
-    fontSize: 42,
-    marginLeft: 8,
+  heroOrbSmall: {
+    position: 'absolute',
+    width: 95,
+    height: 95,
+    borderRadius: 48,
+    right: 25,
+    bottom: -50,
+    opacity: 0.25,
   },
-  categoryChip: {
-    minHeight: 44,
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
+  heroDecoration: {position: 'absolute', right: 22, bottom: 20, fontSize: 45, opacity: 0.9},
+  section: {marginBottom: 29},
+  sectionHeading: {flexDirection: 'row', alignItems: 'center', marginBottom: 15, gap: 9},
+  headingAccent: {width: 4, height: 22, borderRadius: 4, backgroundColor: '#2F9D78'},
+  sectionTitle: {fontSize: 19, fontWeight: '900', letterSpacing: -0.4, flexShrink: 1},
+  headingRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},
+  viewAll: {fontSize: 12, fontWeight: '800'},
+  horizontalContent: {gap: 14, paddingRight: 5},
+  categoryItem: {width: 76, alignItems: 'center'},
+  categoryCircle: {
+    width: 65,
+    height: 65,
+    borderRadius: 23,
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 9,
   },
-  categoryEmoji: {
-    fontSize: 17,
-  },
-  categoryLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  quickGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  quickAction: {
+  categoryIcon: {fontSize: 27},
+  categoryLabel: {fontSize: 11, fontWeight: '800', textAlign: 'center'},
+  quickGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 12},
+  quickCard: {
     width: '47%',
     flexGrow: 1,
     flexBasis: '40%',
-    minHeight: 120,
+    minHeight: 122,
     padding: 14,
-    borderRadius: 16,
+    borderRadius: 19,
     borderWidth: 1,
   },
-  quickIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  quickIcon: {
-    fontSize: 22,
-  },
-  quickTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  cardSubtitle: {
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 5,
-  },
-  serviceGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
+  quickIconCircle: {width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 12},
+  quickIcon: {fontSize: 22},
+  quickLabelRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4},
+  quickLabel: {fontSize: 13, fontWeight: '800', flexShrink: 1},
+  cardArrow: {fontSize: 17, fontWeight: '800'},
+  mutedText: {fontSize: 11, lineHeight: 16, marginTop: 5},
+  serviceGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 12},
   serviceCard: {
     width: '47%',
     flexGrow: 1,
     flexBasis: '40%',
-    borderRadius: 16,
+    padding: 10,
+    borderRadius: 19,
     borderWidth: 1,
-    padding: 14,
-    minHeight: 150,
+    minHeight: 200,
   },
-  serviceImage: {
-    width: '100%',
-    height: 90,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  serviceIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  serviceIcon: {
-    fontSize: 23,
-  },
-  badge: {
-    alignSelf: 'flex-start',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginBottom: 8,
-  },
-  serviceTitle: {
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '700',
-  },
-  price: {
-    fontSize: 14,
-    fontWeight: '800',
-    marginTop: 7,
-  },
-  doctorCard: {
-    width: 172,
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 12,
-  },
-  doctorPhoto: {
-    width: '100%',
-    height: 105,
-    borderRadius: 12,
-    marginBottom: 10,
-  },
-  doctorPlaceholder: {
-    width: '100%',
-    height: 105,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-  doctorPlaceholderIcon: {
-    fontSize: 36,
-  },
-  doctorName: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  nextSlot: {
-    fontSize: 11,
-    marginTop: 6,
-  },
-  offerStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 24,
-    gap: 12,
-  },
-  offerEmoji: {
-    fontSize: 25,
-  },
-  offerTextContainer: {
-    flex: 1,
-  },
-  offerTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  offerSubtitle: {
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 4,
-  },
-  footer: {
-    textAlign: 'center',
-    fontSize: 12,
-    marginTop: 8,
-    paddingBottom: 12,
-  },
+  serviceImageWrap: {position: 'relative', marginBottom: 11},
+  serviceImage: {width: '100%', height: 105, borderRadius: 13},
+  serviceImageFallback: {height: 105, borderRadius: 13, alignItems: 'center', justifyContent: 'center', overflow: 'hidden'},
+  serviceFallbackIcon: {fontSize: 36},
+  imageSparkle: {position: 'absolute', width: 20, height: 20, borderRadius: 10, top: 10, right: 10, opacity: 0.85},
+  serviceBadge: {position: 'absolute', top: 7, left: 7, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8},
+  serviceBadgeText: {fontSize: 9, fontWeight: '900'},
+  serviceTitle: {fontSize: 13, lineHeight: 18, fontWeight: '800', minHeight: 36},
+  priceRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8},
+  price: {fontSize: 15, fontWeight: '900'},
+  priceArrow: {width: 28, height: 28, borderRadius: 10, alignItems: 'center', justifyContent: 'center'},
+  doctorCard: {width: 205, borderRadius: 20, padding: 12, borderWidth: 1},
+  doctorPhotoWrap: {height: 125, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 12, overflow: 'hidden'},
+  doctorPhoto: {width: '100%', height: '100%'},
+  doctorEmoji: {fontSize: 48},
+  availableDot: {position: 'absolute', right: 9, top: 9, width: 11, height: 11, borderRadius: 6, backgroundColor: '#35B779', borderWidth: 2, borderColor: '#FFFFFF'},
+  doctorName: {fontSize: 14, fontWeight: '900'},
+  doctorSpecialty: {fontSize: 11, marginTop: 4},
+  slotPill: {alignSelf: 'flex-start', borderRadius: 9, paddingHorizontal: 8, paddingVertical: 7, marginTop: 10},
+  slotText: {fontSize: 10, fontWeight: '800'},
+  doctorFee: {fontSize: 15, fontWeight: '900', marginTop: 10},
+  feeSuffix: {fontSize: 10, fontWeight: '500'},
+  offerCard: {flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 20, gap: 12, marginBottom: 27},
+  offerIconCircle: {width: 48, height: 48, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.65)', alignItems: 'center', justifyContent: 'center'},
+  offerIcon: {fontSize: 24},
+  offerCopy: {flex: 1},
+  offerTitle: {fontSize: 14, fontWeight: '900'},
+  offerSubtitle: {fontSize: 11, lineHeight: 16, marginTop: 4},
+  offerArrow: {fontSize: 22, fontWeight: '800'},
+  emptyState: {alignItems: 'center', paddingVertical: 45},
+  emptyIcon: {fontSize: 40, marginBottom: 12},
+  emptyTitle: {fontSize: 18, fontWeight: '900'},
+  emptySubtitle: {fontSize: 13, marginTop: 6},
+  resetButton: {marginTop: 16, minHeight: 44, paddingHorizontal: 20, borderRadius: 13, justifyContent: 'center'},
+  resetButtonText: {color: '#FFFFFF', fontWeight: '800'},
+  footer: {alignItems: 'center', paddingTop: 9, paddingBottom: 14},
+  footerHeart: {fontSize: 18, color: '#2F9D78', marginBottom: 5},
+  footerText: {fontSize: 12, fontWeight: '700'},
+  footerCaption: {fontSize: 9, fontWeight: '800', letterSpacing: 1.3, marginTop: 8},
 });
