@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useCallback, useState} from 'react';
 import {
   StatusBar,
   StyleSheet,
@@ -6,6 +6,7 @@ import {
   View,
 } from 'react-native';
 
+import SplashScreen from './src/screens/SplashScreen';
 import {
   ThemeProvider,
   useAppTheme,
@@ -19,11 +20,8 @@ function AppContent() {
       style={[
         styles.container,
         { backgroundColor: theme.background },
-      ]}
-    >
-      <StatusBar
-        barStyle="dark-content"
-      />
+      ]}>
+      <StatusBar barStyle="dark-content" />
 
       <View
         style={[
@@ -32,8 +30,7 @@ function AppContent() {
             backgroundColor: theme.surface,
             borderRadius: theme.radius.lg,
           },
-        ]}
-      >
+        ]}>
         <Text
           style={[
             styles.title,
@@ -41,8 +38,7 @@ function AppContent() {
               color: theme.primary,
               fontSize: theme.typography.heading,
             },
-          ]}
-        >
+          ]}>
           Tapza Care
         </Text>
 
@@ -53,8 +49,7 @@ function AppContent() {
               color: theme.textSecondary,
               fontSize: theme.typography.body,
             },
-          ]}
-        >
+          ]}>
           Your health, made simple.
         </Text>
       </View>
@@ -62,10 +57,24 @@ function AppContent() {
   );
 }
 
+function AppRoot() {
+  const [showSplash, setShowSplash] = useState(true);
+
+  const finishSplash = useCallback(() => {
+    setShowSplash(false);
+  }, []);
+
+  if (showSplash) {
+    return <SplashScreen onFinish={finishSplash} />;
+  }
+
+  return <AppContent />;
+}
+
 export default function App() {
   return (
     <ThemeProvider config={null}>
-      <AppContent />
+      <AppRoot />
     </ThemeProvider>
   );
 }
